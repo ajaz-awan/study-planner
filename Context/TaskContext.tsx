@@ -1,6 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { ref, set, onValue, remove, update } from "firebase/database";
-import { db } from "../firebaseConfig";
+import { supabase } from "../lib/supabase";
 import { useAuth } from "./AuthContext";
 
 const TaskContext = createContext<any>(null);
@@ -11,39 +10,49 @@ export const TaskProvider = ({ children }: any) => {
 
   useEffect(() => {
     if (!user) return;
-    const tasksRef = ref(db, "tasks/" + user.uid);
-    const unsub = onValue(tasksRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        const list = Object.entries(data).map(([id, val]: any) => ({ id, ...val }));
-        setTasks(list);
-      } else {
-        setTasks([]);
-      }
-    });
-    return () => unsub();
+    fetchTasks();
+
+    // Realtime listener
+    const subscription = supabase
+      .channel('tasks')
+      .on('postgres_changes', 
+        { event: '*', schema: 'public', table: 'tasks', filter: `user_id=eq.${user.id}` },
+        () => { fetchTasks(); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(subscription); };
   }, [user]);
+
+  const fetchTasks = async () => {
+    if (!user) return;
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('created_at', { ascending: false });
+    if (!error && data) setTasks(data);
+  };
 
   const addTask = async (task: any) => {
     if (!user) return;
-    const id = Date.now().toString();
-    await set(ref(db, "tasks/" + user.uid + "/" + id), { ...task, id, done: false });
+    await supabase.from('tasks').insert({ ...task, user_id: user.id, done: false });
   };
 
   const editTask = async (id: string, updated: any) => {
     if (!user) return;
-    await update(ref(db, "tasks/" + user.uid + "/" + id), updated);
+    await supabase.from('tasks').update(updated).eq('id', id);
   };
 
   const deleteTask = async (id: string) => {
     if (!user) return;
-    await remove(ref(db, "tasks/" + user.uid + "/" + id));
+    await supabase.from('tasks').delete().eq('id', id);
   };
 
   const toggleDone = async (id: string) => {
     if (!user) return;
     const task = tasks.find((t) => t.id === id);
-    await update(ref(db, "tasks/" + user.uid + "/" + id), { done: !task.done });
+    await supabase.from('tasks').update({ done: !task.done }).eq('id', id);
   };
 
   return (

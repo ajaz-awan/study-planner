@@ -1,13 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { getDatabase, ref, set, get } from "firebase/database";
-import { 
-  getAuth, 
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-  signOut,
-  onAuthStateChanged
-} from "firebase/auth";
-import { db, auth } from "../firebaseConfig";
+import { supabase } from "../lib/supabase";
 
 const AuthContext = createContext<any>(null);
 
@@ -16,24 +8,40 @@ export const AuthProvider = ({ children }: any) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
+    // Current session check
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
       setLoading(false);
     });
-    return unsub;
+
+    // Auth state listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
   }, []);
 
   const register = async (name: string, email: string, password: string) => {
-    const result = await createUserWithEmailAndPassword(auth, email, password);
-    await set(ref(db, "users/" + result.user.uid), { name, email });
+    const { data, error } = await supabase.auth.signUp({ email, password });
+    if (error) throw error;
+    if (data.user) {
+      await supabase.from("users").insert({
+        id: data.user.id,
+        name,
+        email,
+      });
+    }
   };
 
   const login = async (email: string, password: string) => {
-    await signInWithEmailAndPassword(auth, email, password);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
   };
 
   const logout = async () => {
-    await signOut(auth);
+    await supabase.auth.signOut();
   };
 
   return (
